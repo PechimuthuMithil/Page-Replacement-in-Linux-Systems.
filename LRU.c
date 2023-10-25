@@ -26,14 +26,12 @@ static size_t page_size;
 struct node { // Used to make a node of the queue (Linked list application of the queue)
   int poses[2];
   uintptr_t page_number;  // Used as value
-  int reference;
+  struct node* prev;
   struct node* next;    // Next Pointer
 };
 
 struct node* page_queue_front= NULL; // Rear and front pointers to keep the track of the queue's start and end
 struct node* page_queue_rear= NULL;
-struct node* page_pointer_replace = NULL;
-struct node* page_pointer_search = NULL;
 int max_faults = 1;
 int faults_encountered = 0; // Stores the number of page faults we faced.
 static double *sqrts; // Stores the address of a number (prev number actually) whose page is valid. We will evacuate this page once number of faults exceeds MAX_FAULTS 
@@ -42,33 +40,8 @@ static double *sqrts_copy;
 int did_fault_occur = 0;
 int hits = 0;
 
-void makeTable(){
-  int noOfPages = MAX_FAULTS;
-  struct node* header = (struct node*)malloc(sizeof(struct node));
-  header->page_number=0;
-  header->reference=0;
-  header->next = NULL;
-  page_queue_front = header;
-  page_queue_rear = header;
-  page_pointer_replace=header;
-
-  noOfPages--;
-
-  while(noOfPages){
-    struct node* temp = (struct node*)malloc(sizeof(struct node));
-    temp->page_number=0;
-    temp->reference=0;
-    page_queue_rear->next= temp;
-    page_queue_rear = temp;
-    noOfPages--;
-  }
-  page_queue_rear->next = page_queue_front;
-
-}
-void push_Back(uintptr_t value, int left, int right) 
+void push_Front(uintptr_t value, int left, int right) 
 {
-  // page_pointer_replace = page_queue_front;
-  // page_pointer_search = page_queue_front;
   struct node *temp;
   temp=(struct node *)malloc(sizeof(struct node));
   if(temp==NULL)
@@ -77,19 +50,18 @@ void push_Back(uintptr_t value, int left, int right)
     exit(0);
   }
   temp->page_number = value;
-  temp->reference = 1;
-  temp->next=page_queue_front; 
+  temp->prev=NULL;
   temp->poses[0] = left;
   temp->poses[1] = right;
   if(page_queue_front == NULL){
     page_queue_front  = temp;
     page_queue_rear = temp;
+    temp->next = NULL;
   }else{
-    page_queue_rear->next = temp;
-    page_queue_rear = temp;
+    page_queue_front->prev = temp;
+    temp->next = page_queue_front; 
+    page_queue_front = temp;
   }
-  page_pointer_replace = page_queue_front;
-  page_pointer_search = page_queue_front;
   return;
 }
 
@@ -114,17 +86,15 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
   faults_encountered += 1;    
   //printf("faults: %d\n",faults_encountered);                                   
   if (faults_encountered > max_faults){
-
-    while (page_pointer_replace->reference != 0){
-      page_pointer_replace->reference = 0;
-      page_pointer_replace = page_pointer_replace->next;
-    }
-    uintptr_t replace_page_number = page_pointer_replace->page_number;
+    uintptr_t replace_page_number = page_queue_rear->page_number;
     if (munmap((void*)replace_page_number, page_size) == -1) {
         fprintf(stderr, "Couldn't munmap() the previous page; %s\n",
                 strerror(errno));
         exit(EXIT_FAILURE);
     }
+    page_queue_rear = page_queue_rear->prev;
+    free(page_queue_rear->next);
+    page_queue_rear->next = NULL;
     double *mapped_page = mmap((void*)req_page_number, page_size, PROT_READ | PROT_WRITE,  // Newly mapped page
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 
@@ -139,11 +109,7 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
     int posl = offset_pg*nums_in_page;
     int posr = posl + nums_in_page - 1;
     calculate_sqrts(mapped_page, pos, nums_in_page);
-    page_pointer_replace->page_number = req_page_number;
-    page_pointer_replace->reference = 1;
-    page_pointer_replace->poses[0] = posl;
-    page_pointer_replace->poses[1] = posr;
-    page_pointer_replace = page_pointer_replace->next; 
+    push_Front(req_page_number,posl,posr);
     return; 
   }
   else{
@@ -161,7 +127,7 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
     int offset_pg = pos/nums_in_page; 
     int posl = offset_pg*nums_in_page;
     int posr = posl + nums_in_page - 1;
-    push_Back(req_page_number,posl,posr);
+    push_Front(req_page_number,posl,posr);
     return;
   }
 }
@@ -170,10 +136,31 @@ static void
 update_reference(int position)
 {
   hits += 1;
+  //printf("hits: %d\n",hits);
+  struct node* page_pointer_search = page_queue_front;
+  if (page_queue_front->poses[0] <= position && page_queue_front->poses[1] >= position){
+    return;
+  }
   while(page_pointer_search->poses[0] > position || page_pointer_search->poses[1] < position){
     page_pointer_search = page_pointer_search->next;
   }
-  page_pointer_search->reference = 1;
+  if (page_pointer_search != page_queue_rear){
+    page_pointer_search->prev->next = page_pointer_search->next;
+    page_pointer_search->next->prev = page_pointer_search->prev;
+    page_pointer_search->next = page_queue_front;
+    page_pointer_search->prev = NULL;
+    page_queue_front->prev = page_pointer_search;
+    page_queue_front = page_pointer_search;
+  }
+  else{
+    page_queue_rear = page_pointer_search->prev;
+    page_pointer_search->prev->next = NULL;
+    page_pointer_search->next = page_queue_front;
+    page_pointer_search->prev = NULL;
+    page_queue_front->prev = page_pointer_search;
+    page_queue_front = page_pointer_search;
+  }
+  return;
 }
 
 static void
@@ -238,7 +225,6 @@ test_sqrt_region(void)
     }
     did_fault_occur = 0;
   }
-
   printf("All tests passed!\n");
   printf("Total page faults encountered :%d\n",faults_encountered);
 }
