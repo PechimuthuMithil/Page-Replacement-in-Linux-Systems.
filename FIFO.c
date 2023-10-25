@@ -22,26 +22,23 @@ static size_t page_size;
 #define MAX_SQRTS	(1 << 27) // Maximum limit on sqrt table entries
 #define MAX_FAULTS (1 << 12) // Maximum number of pages we can map before the first need for an unmap.
 // if we reduce the number of MAX_FAULTS, the number of faults encountered increases.
-
+int max_faults = 1;
 struct node { // Used to make a node of the queue (Linked list application of the queue)
   int poses[2];
   uintptr_t page_number;  // Used as value
-  struct node* prev;
   struct node* next;    // Next Pointer
 };
 
 struct node* page_queue_front= NULL; // Rear and front pointers to keep the track of the queue's start and end
 struct node* page_queue_rear= NULL;
-int max_faults = 1;
-int as_limit = 1;
-int faults_encountered = 0; // Stores the number of page faults we faced.
-static double *sqrts; // Stores the address of a number (prev number actually) whose page is valid. We will evacuate this page once number of faults exceeds MAX_FAULTS 
-// Use this helper function as an oracle for square root values.
-static double *sqrts_copy;
-int did_fault_occur = 0;
-int hits = 0;
 
-void push_Front(uintptr_t value, int left, int right) 
+int faults_encountered = 0; // Stores the number of page faults we faced.
+static double *sqrts;
+uintptr_t prev_fault_addr;  // Stores the address of a number (prev number actually) whose page is valid. We will evacuate this page once number of faults exceeds MAX_FAULTS 
+// Use this helper function as an oracle for square root values.
+
+
+void push_Back(uintptr_t value, int left, int right) // FIFO(Queue) function to insert nodes/ elements at the end to the queue
 {
   struct node *temp;
   temp=(struct node *)malloc(sizeof(struct node));
@@ -51,19 +48,38 @@ void push_Front(uintptr_t value, int left, int right)
     exit(0);
   }
   temp->page_number = value;
-  temp->prev=NULL;
+  temp->next=NULL;
   temp->poses[0] = left;
   temp->poses[1] = right;
   if(page_queue_front == NULL){
     page_queue_front  = temp;
     page_queue_rear = temp;
-    temp->next = NULL;
   }else{
-    page_queue_front->prev = temp;
-    temp->next = page_queue_front; 
-    page_queue_front = temp;
+    page_queue_rear ->next = temp;
+    page_queue_rear = temp;
   }
   return;
+}
+
+uintptr_t pop_Front() // Function to remove the the front element from the queue
+{
+  struct node *temp;
+  uintptr_t pg_number;
+
+  if(page_queue_front == NULL && page_queue_rear == NULL)
+  {
+    printf("The queue is empty can not delete Error\n");
+    exit(0);
+  }
+
+  temp = page_queue_front;
+  page_queue_front = page_queue_front->next;
+  pg_number = temp->page_number;
+  
+  free(temp);
+  return pg_number;
+  
+  
 }
 
 static void
@@ -75,6 +91,9 @@ calculate_sqrts(double *sqrt_pos, int start, int nr)
     sqrt_pos[i] = sqrt((double)(start + i));
 }
 
+
+// We have implemented a queue to keep the number of faults in bound and if they go beyond the bound we remove the first element(pop_Front)
+//  we remove the element (first entered page) from the queue and unmap it, and insert when a new page is added.
 static void
 printTable(){
   int num = 1;
@@ -96,105 +115,52 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 {
   printTable();
   uintptr_t fault_addr = (uintptr_t)si->si_addr;
-  //printf("fault address: %lx\n",fault_addr);
-  uintptr_t req_page_number = align_down(fault_addr, page_size); 
-  did_fault_occur = 1;
-  faults_encountered += 1;    
-  //printf("faults: %d\n",faults_encountered);                                   
-  if (faults_encountered > max_faults){
-    uintptr_t replace_page_number = page_queue_rear->page_number;
-    if (munmap((void*)replace_page_number, page_size) == -1) {
-        fprintf(stderr, "Couldn't munmap() the previous page; %s\n",
-                strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    page_queue_rear = page_queue_rear->prev;
-    free(page_queue_rear->next);
-    page_queue_rear->next = NULL;
-    double *mapped_page = mmap((void*)req_page_number, page_size, PROT_READ | PROT_WRITE,  // Newly mapped page
-                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-
-    if (mapped_page == MAP_FAILED) {
-      fprintf(stderr, "Couldn't mmap() a new page for square root values at 0x%lx; %s\n",
-              req_page_number, strerror(errno));
+  uintptr_t req_page_number = align_down(fault_addr, page_size); // page number of the page in which the req sqrt[pos] is present.
+  faults_encountered += 1;                                       // increasing the counter each time we enter the signal handler
+  if (faults_encountered > max_faults){   
+    uintptr_t prev_page_number= pop_Front();
+    if (munmap((void*)prev_page_number, page_size) == -1) {
+      fprintf(stderr, "Couldn't munmap() the previous page; %s\n",
+              strerror(errno));
       exit(EXIT_FAILURE);
     }
-    int pos = (req_page_number / sizeof(double)) - ((uintptr_t)sqrts/ sizeof(double)); // Found the position wrt to the alloted memory(according to the setup_sqrt_region funtion), sqrts is pointed to it.
-    int nums_in_page = page_size / sizeof(double);
-    int offset_pg = pos/nums_in_page; 
-    int posl = offset_pg*nums_in_page;
-    int posr = posl + nums_in_page - 1;
-    calculate_sqrts(mapped_page, pos, nums_in_page);
-    push_Front(req_page_number,posl,posr);
-    return; 
   }
-  else{
-    double *mapped_page = mmap((void*)req_page_number, page_size, PROT_READ | PROT_WRITE,  // Newly mapped page
-                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+  
+  double *mapped_page = mmap((void*)req_page_number, page_size, PROT_READ | PROT_WRITE,  // Newly mapped page
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 
-    if (mapped_page == MAP_FAILED) {
-      fprintf(stderr, "Couldn't mmap() a new page for square root values at 0x%lx; %s\n",
-              req_page_number, strerror(errno));
-      exit(EXIT_FAILURE);
-    }
-    int pos = (req_page_number / sizeof(double)) - ((uintptr_t)sqrts/ sizeof(double)); // Found the position wrt to the alloted memory(according to the setup_sqrt_region funtion), sqrts is pointed to it.
-    int nums_in_page = page_size / sizeof(double);
-    calculate_sqrts(mapped_page, pos, nums_in_page);
-    int offset_pg = pos/nums_in_page; 
-    int posl = offset_pg*nums_in_page;
-    int posr = posl + nums_in_page - 1;
-    push_Front(req_page_number,posl,posr);
-    return;
+  if (mapped_page == MAP_FAILED) {
+    fprintf(stderr, "Couldn't mmap() a new page for square root values at 0x%lx; %s\n",
+            req_page_number, strerror(errno));
+    exit(EXIT_FAILURE);
   }
-}
-
-static void
-update_reference(int position)
-{
-  hits += 1;
-  //printf("hits: %d\n",hits);
-  struct node* page_pointer_search = page_queue_front;
-  if (page_queue_front->poses[0] <= position && page_queue_front->poses[1] >= position){
-    return;
-  }
-  while(page_pointer_search->poses[0] > position || page_pointer_search->poses[1] < position){
-    page_pointer_search = page_pointer_search->next;
-  }
-  if (page_pointer_search != page_queue_rear){
-    page_pointer_search->prev->next = page_pointer_search->next;
-    page_pointer_search->next->prev = page_pointer_search->prev;
-    page_pointer_search->next = page_queue_front;
-    page_pointer_search->prev = NULL;
-    page_queue_front->prev = page_pointer_search;
-    page_queue_front = page_pointer_search;
-  }
-  else{
-    page_queue_rear = page_pointer_search->prev;
-    page_pointer_search->prev->next = NULL;
-    page_pointer_search->next = page_queue_front;
-    page_pointer_search->prev = NULL;
-    page_queue_front->prev = page_pointer_search;
-    page_queue_front = page_pointer_search;
-  }
+  int pos = (req_page_number / sizeof(double)) - ((uintptr_t)sqrts/ sizeof(double)); // Found the position wrt to the alloted memory(according to the setup_sqrt_region funtion), sqrts is pointed to it.
+  int nums_in_page = page_size / sizeof(double);
+  calculate_sqrts(mapped_page, pos, nums_in_page);
+  int offset_pg = pos/nums_in_page; 
+  int posl = offset_pg*nums_in_page;
+  int posr = posl + nums_in_page - 1;
+  push_Back(req_page_number, posl, posr);
   return;
 }
 
 static void
 setup_sqrt_region(void)
 {
-  struct rlimit lim = {as_limit, as_limit};
+  struct rlimit lim = {AS_LIMIT, AS_LIMIT};
   struct sigaction act;
 
   // Only mapping to find a safe location for the table.
-  sqrts = mmap(NULL, MAX_SQRTS * sizeof(double) + as_limit, PROT_NONE,
+  sqrts = mmap(NULL, MAX_SQRTS * sizeof(double) + AS_LIMIT, PROT_NONE,
 	       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (sqrts == MAP_FAILED) {
     fprintf(stderr, "Couldn't mmap() region for sqrt table; %s\n",
 	    strerror(errno));
     exit(EXIT_FAILURE);
   }
+
   // Now release the virtual memory to remain under the rlimit.
-  if (munmap(sqrts, MAX_SQRTS * sizeof(double) + as_limit) == -1) {
+  if (munmap(sqrts, MAX_SQRTS * sizeof(double) + AS_LIMIT) == -1) {
     fprintf(stderr, "Couldn't munmap() region for sqrt table; %s\n",
             strerror(errno));
     exit(EXIT_FAILURE);
@@ -236,15 +202,11 @@ test_sqrt_region1(void)
               correct_sqrt, sqrts[pos]);
       exit(EXIT_FAILURE);
     }
-    if (did_fault_occur == 0){
-      update_reference(pos);
-    }
-    did_fault_occur = 0;
   }
+
   printf("All tests passed!\n");
   printf("Total page faults encountered :%d\n",faults_encountered);
 }
-
 static void
 test_sqrt_region2(void)
 {
@@ -264,10 +226,6 @@ for (i = 0; i < 50000000; i++)
               correct_sqrt, sqrts[pos]);
       exit(EXIT_FAILURE);
     }
-    if (did_fault_occur == 0){
-      update_reference(pos);
-    }
-    did_fault_occur = 0;
   }
 
   printf("All tests passed!\n");
@@ -293,10 +251,6 @@ for (i = 0; i < 50000000; i = i + 1000)
               correct_sqrt, sqrts[pos]);
       exit(EXIT_FAILURE);
     }
-    if (did_fault_occur == 0){
-      update_reference(pos);
-    }
-    did_fault_occur = 0;
   }
 
   printf("All tests passed!\n");
@@ -306,13 +260,11 @@ for (i = 0; i < 50000000; i = i + 1000)
 int
 main(int argc, char *argv[])
 {
-  int N = atoi(argv[1]); 
-  max_faults = 1 << N-1;
-  as_limit = 1 << 25;
+  int N = atoi(argv[1]);
+  max_faults = 1 << N-1; 
   page_size = sysconf(_SC_PAGESIZE);
   printf("page_size is %ld\n", page_size);
   setup_sqrt_region();
   test_sqrt_region1();
-  printf("Total hits: %d\n",hits);
   return 0;
 }

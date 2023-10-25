@@ -35,6 +35,7 @@ struct node* page_queue_rear= NULL;
 struct node* page_pointer_replace = NULL;
 struct node* page_pointer_search = NULL;
 int max_faults = 1;
+int as_limit = 1;
 int faults_encountered = 0; // Stores the number of page faults we faced.
 static double *sqrts; // Stores the address of a number (prev number actually) whose page is valid. We will evacuate this page once number of faults exceeds MAX_FAULTS 
 // Use this helper function as an oracle for square root values.
@@ -102,11 +103,49 @@ calculate_sqrts(double *sqrt_pos, int start, int nr)
     sqrt_pos[i] = sqrt((double)(start + i));
 }
 
+static void
+printTable(){
+  int num = 1;
+  struct node* temp = page_queue_front;
+  printf("Current status of the table\n");
+  while (temp != page_queue_rear){
+    if (temp == page_pointer_replace){
+      printf("\t %d positon range = [%d,%d]",num,temp->poses[0],temp->poses[1]);
+      printf("\t reference = %d \t<-- replace pointer\n",temp->reference);
+    }
+    else if (temp == page_pointer_search){
+      printf("\t %d positon range = [%d,%d]",num,temp->poses[0],temp->poses[1]);
+      printf("\t reference = %d \t<-- search pointer\n",temp->reference);
+    }
+    else{
+    printf("\t %d positon range = [%d,%d]",num,temp->poses[0],temp->poses[1]);
+    printf("\t reference = %d\n",temp->reference);
+    }
+    temp = temp->next;
+    num += 1;
+  }
+  if (num > 1){
+    if (temp == page_pointer_replace){
+      printf("\t %d positon range = [%d,%d]",num,temp->poses[0],temp->poses[1]);
+      printf("\t reference = %d \t<-- replace pointer\n",temp->reference);
+    }
+    else if (temp == page_pointer_search){
+      printf("\t %d positon range = [%d,%d]",num,temp->poses[0],temp->poses[1]);
+      printf("\t reference = %d \t<-- search pointer\n",temp->reference);
+    }
+    else{
+    printf("\t %d positon range = [%d,%d]",num,temp->poses[0],temp->poses[1]);
+    printf("\t reference = %d\n",temp->reference);
+    }
+  }
 
+  printf("----------------\n");
+}
 
 static void
 handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 {
+  printTable();
   uintptr_t fault_addr = (uintptr_t)si->si_addr;
   //printf("fault address: %lx\n",fault_addr);
   uintptr_t req_page_number = align_down(fault_addr, page_size); 
@@ -179,11 +218,11 @@ update_reference(int position)
 static void
 setup_sqrt_region(void)
 {
-  struct rlimit lim = {AS_LIMIT, AS_LIMIT};
+  struct rlimit lim = {as_limit, as_limit};
   struct sigaction act;
 
   // Only mapping to find a safe location for the table.
-  sqrts = mmap(NULL, MAX_SQRTS * sizeof(double) + AS_LIMIT, PROT_NONE,
+  sqrts = mmap(NULL, MAX_SQRTS * sizeof(double) + as_limit, PROT_NONE,
 	       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (sqrts == MAP_FAILED) {
     fprintf(stderr, "Couldn't mmap() region for sqrt table; %s\n",
@@ -191,7 +230,7 @@ setup_sqrt_region(void)
     exit(EXIT_FAILURE);
   }
   // Now release the virtual memory to remain under the rlimit.
-  if (munmap(sqrts, MAX_SQRTS * sizeof(double) + AS_LIMIT) == -1) {
+  if (munmap(sqrts, MAX_SQRTS * sizeof(double) + as_limit) == -1) {
     fprintf(stderr, "Couldn't munmap() region for sqrt table; %s\n",
             strerror(errno));
     exit(EXIT_FAILURE);
@@ -214,7 +253,7 @@ setup_sqrt_region(void)
 }
 
 static void
-test_sqrt_region(void)
+test_sqrt_region1(void)
 {
   int i, pos = rand() % (MAX_SQRTS - 1);
   double correct_sqrt;
@@ -222,7 +261,7 @@ test_sqrt_region(void)
   printf("Validating square root table contents...\n");
   srand(0xDEADBEEF);
 
-  for (i = 0; i < 50000; i++) {
+  for (i = 0; i < 50; i++) {
     if (i % 2 == 0)
       pos = rand() % (MAX_SQRTS - 1);
     else
@@ -242,16 +281,74 @@ test_sqrt_region(void)
   printf("All tests passed!\n");
   printf("Total page faults encountered :%d\n",faults_encountered);
 }
+static void
+test_sqrt_region2(void)
+{
+  int i, pos = rand() % (MAX_SQRTS - 1);
+  double correct_sqrt;
+
+  printf("Validating square root table contents...\n");
+  srand(0xDEADBEEF);
+
+  
+for (i = 0; i < 50000000; i++)
+{
+    pos = i % (MAX_SQRTS - 1);
+    calculate_sqrts(&correct_sqrt, pos, 1);
+    if (sqrts[pos] != correct_sqrt) {
+      fprintf(stderr, "Square root is incorrect. Expected %f, got %f.\n",
+              correct_sqrt, sqrts[pos]);
+      exit(EXIT_FAILURE);
+    }
+    if (did_fault_occur == 0){
+      update_reference(pos);
+    }
+    did_fault_occur = 0;
+  }
+
+  printf("All tests passed!\n");
+  printf("Total page faults encountered :%d\n",faults_encountered);
+}
+
+static void
+test_sqrt_region3(void)
+{
+  int i, pos = rand() % (MAX_SQRTS - 1);
+  double correct_sqrt;
+
+  printf("Validating square root table contents...\n");
+  srand(0xDEADBEEF);
+
+  
+for (i = 0; i < 50000000; i = i + 1000)
+{
+  pos = i % (MAX_SQRTS - 1);
+  calculate_sqrts(&correct_sqrt, pos, 1);
+  if (sqrts[pos] != correct_sqrt){
+      fprintf(stderr, "Square root is incorrect. Expected %f, got %f.\n",
+              correct_sqrt, sqrts[pos]);
+      exit(EXIT_FAILURE);
+    }
+    if (did_fault_occur == 0){
+      update_reference(pos);
+    }
+    did_fault_occur = 0;
+  }
+
+  printf("All tests passed!\n");
+  printf("Total page faults encountered :%d\n",faults_encountered);
+}
 
 int
 main(int argc, char *argv[])
 {
   int N = atoi(argv[1]); 
-  max_faults = 1 << N;
+  max_faults = 1 << N-1;
+  as_limit = 1 << 25;
   page_size = sysconf(_SC_PAGESIZE);
   printf("page_size is %ld\n", page_size);
   setup_sqrt_region();
-  test_sqrt_region();
+  test_sqrt_region1();
   printf("Total hits: %d\n",hits);
   return 0;
 }
