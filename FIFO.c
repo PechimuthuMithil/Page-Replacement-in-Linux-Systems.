@@ -23,6 +23,7 @@ static size_t page_size;
 #define MAX_FAULTS (1 << 12) // Maximum number of pages we can map before the first need for an unmap.
 // if we reduce the number of MAX_FAULTS, the number of faults encountered increases.
 int max_faults = 1;
+int as_limit = 1 << 25;
 struct node { // Used to make a node of the queue (Linked list application of the queue)
   int poses[2];
   uintptr_t page_number;  // Used as value
@@ -113,7 +114,7 @@ printTable(){
 static void
 handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 {
-  printTable();
+  //printTable();
   uintptr_t fault_addr = (uintptr_t)si->si_addr;
   uintptr_t req_page_number = align_down(fault_addr, page_size); // page number of the page in which the req sqrt[pos] is present.
   faults_encountered += 1;                                       // increasing the counter each time we enter the signal handler
@@ -147,11 +148,11 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 static void
 setup_sqrt_region(void)
 {
-  struct rlimit lim = {AS_LIMIT, AS_LIMIT};
+  struct rlimit lim = {as_limit, as_limit};
   struct sigaction act;
 
   // Only mapping to find a safe location for the table.
-  sqrts = mmap(NULL, MAX_SQRTS * sizeof(double) + AS_LIMIT, PROT_NONE,
+  sqrts = mmap(NULL, MAX_SQRTS * sizeof(double) + as_limit, PROT_NONE,
 	       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (sqrts == MAP_FAILED) {
     fprintf(stderr, "Couldn't mmap() region for sqrt table; %s\n",
@@ -160,7 +161,7 @@ setup_sqrt_region(void)
   }
 
   // Now release the virtual memory to remain under the rlimit.
-  if (munmap(sqrts, MAX_SQRTS * sizeof(double) + AS_LIMIT) == -1) {
+  if (munmap(sqrts, MAX_SQRTS * sizeof(double) + as_limit) == -1) {
     fprintf(stderr, "Couldn't munmap() region for sqrt table; %s\n",
             strerror(errno));
     exit(EXIT_FAILURE);
@@ -191,7 +192,7 @@ test_sqrt_region1(void)
   printf("Validating square root table contents...\n");
   srand(0xDEADBEEF);
 
-  for (i = 0; i < 50; i++) {
+  for (i = 0; i < 500000; i++) {
     if (i % 2 == 0)
       pos = rand() % (MAX_SQRTS - 1);
     else
@@ -261,7 +262,13 @@ int
 main(int argc, char *argv[])
 {
   int N = atoi(argv[1]);
-  max_faults = 1 << N-1; 
+  max_faults = 1 << N; 
+  if (N > 12){
+    as_limit = 1 << N + 13;
+  }
+  else {
+    as_limit = 1 << 25;
+  }
   page_size = sysconf(_SC_PAGESIZE);
   printf("page_size is %ld\n", page_size);
   setup_sqrt_region();

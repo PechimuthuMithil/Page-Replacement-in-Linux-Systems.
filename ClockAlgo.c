@@ -145,7 +145,7 @@ printTable(){
 static void
 handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 {
-  printTable();
+  //printTable();
   uintptr_t fault_addr = (uintptr_t)si->si_addr;
   //printf("fault address: %lx\n",fault_addr);
   uintptr_t req_page_number = align_down(fault_addr, page_size); 
@@ -261,7 +261,7 @@ test_sqrt_region1(void)
   printf("Validating square root table contents...\n");
   srand(0xDEADBEEF);
 
-  for (i = 0; i < 50; i++) {
+  for (i = 0; i < 500000; i++) {
     if (i % 2 == 0)
       pos = rand() % (MAX_SQRTS - 1);
     else
@@ -343,8 +343,13 @@ int
 main(int argc, char *argv[])
 {
   int N = atoi(argv[1]); 
-  max_faults = 1 << N-1;
-  as_limit = 1 << 25;
+  max_faults = 1 << N;
+  if (N > 12){
+    as_limit = 1 << N + 13;
+  }
+  else {
+    as_limit = 1 << 25;
+  }
   page_size = sysconf(_SC_PAGESIZE);
   printf("page_size is %ld\n", page_size);
   setup_sqrt_region();
