@@ -63,6 +63,7 @@ void push_Front(uintptr_t value, int left, int right)
     temp->next = page_queue_front; 
     page_queue_front = temp;
   }
+  page_queue_rear->next = NULL;
   return;
 }
 
@@ -109,8 +110,13 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
         exit(EXIT_FAILURE);
     }
     page_queue_rear = page_queue_rear->prev;
-    free(page_queue_rear->next);
-    page_queue_rear->next = NULL;
+    if (page_queue_rear != NULL){
+      free(page_queue_rear->next);
+      page_queue_rear->next = NULL;
+    }
+    else{
+      free(page_queue_front);
+    }
     double *mapped_page = mmap((void*)req_page_number, page_size, PROT_READ | PROT_WRITE,  // Newly mapped page
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 
@@ -126,6 +132,7 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
     int posr = posl + nums_in_page - 1;
     calculate_sqrts(mapped_page, pos, nums_in_page);
     push_Front(req_page_number,posl,posr);
+    //printTable();
     return; 
   }
   else{
@@ -144,6 +151,7 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
     int posl = offset_pg*nums_in_page;
     int posr = posl + nums_in_page - 1;
     push_Front(req_page_number,posl,posr);
+    //printTable();
     return;
   }
 }
@@ -230,6 +238,7 @@ test_sqrt_region1(void)
       pos = rand() % (MAX_SQRTS - 1);
     else
       pos += 1;
+    // printf("pos accessed = %d\n",pos);
     calculate_sqrts(&correct_sqrt, pos, 1);
     if (sqrts[pos] != correct_sqrt) {
       fprintf(stderr, "Square root is incorrect. Expected %f, got %f.\n",
@@ -240,6 +249,7 @@ test_sqrt_region1(void)
       update_reference(pos);
     }
     did_fault_occur = 0;
+
   }
   printf("All tests passed!\n");
   printf("Total page faults encountered :%d\n",faults_encountered);
@@ -307,17 +317,12 @@ int
 main(int argc, char *argv[])
 {
   int N = atoi(argv[1]); 
-  max_faults = 1 << N;
-  if (N > 12){
-    as_limit = 1 << N + 13;
-  }
-  else {
-    as_limit = 1 << 25;
-  }
+  max_faults = N;
+  as_limit = 1 << 25;
   page_size = sysconf(_SC_PAGESIZE);
   printf("page_size is %ld\n", page_size);
   setup_sqrt_region();
   test_sqrt_region1();
-  printf("Total hits: %d\n",hits);
+  //printf("Total hits: %d\n",hits);
   return 0;
 }

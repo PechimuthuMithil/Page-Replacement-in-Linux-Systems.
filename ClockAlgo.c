@@ -145,7 +145,7 @@ printTable(){
 static void
 handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 {
-  //printTable();
+
   uintptr_t fault_addr = (uintptr_t)si->si_addr;
   //printf("fault address: %lx\n",fault_addr);
   uintptr_t req_page_number = align_down(fault_addr, page_size); 
@@ -183,6 +183,7 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
     page_pointer_replace->poses[0] = posl;
     page_pointer_replace->poses[1] = posr;
     page_pointer_replace = page_pointer_replace->next; 
+    //printTable();
     return; 
   }
   else{
@@ -201,6 +202,7 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
     int posl = offset_pg*nums_in_page;
     int posr = posl + nums_in_page - 1;
     push_Back(req_page_number,posl,posr);
+    //printTable();
     return;
   }
 }
@@ -251,7 +253,6 @@ setup_sqrt_region(void)
     exit(EXIT_FAILURE);
   }
 }
-
 static void
 test_sqrt_region1(void)
 {
@@ -277,7 +278,6 @@ test_sqrt_region1(void)
     }
     did_fault_occur = 0;
   }
-
   printf("All tests passed!\n");
   printf("Total page faults encountered :%d\n",faults_encountered);
 }
@@ -343,17 +343,12 @@ int
 main(int argc, char *argv[])
 {
   int N = atoi(argv[1]); 
-  max_faults = 1 << N;
-  if (N > 12){
-    as_limit = 1 << N + 13;
-  }
-  else {
-    as_limit = 1 << 25;
-  }
+  max_faults = N;
+  as_limit = (1 << 25);
   page_size = sysconf(_SC_PAGESIZE);
   printf("page_size is %ld\n", page_size);
   setup_sqrt_region();
   test_sqrt_region1();
-  printf("Total hits: %d\n",hits);
+  //printf("Total hits: %d\n",hits);
   return 0;
 }
